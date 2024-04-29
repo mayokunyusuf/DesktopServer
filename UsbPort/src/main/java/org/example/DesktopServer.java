@@ -3,11 +3,9 @@ package org.example;
 import javax.jmdns.JmDNS;
 import javax.jmdns.ServiceInfo;
 import java.io.IOException;
-import java.net.InetAddress;
-import java.net.NetworkInterface;
-import java.net.ServerSocket;
-import java.net.Socket;
+import java.net.*;
 import java.io.PrintWriter;
+import java.util.Collections;
 import java.util.Enumeration;
 
 public class DesktopServer {
@@ -22,42 +20,73 @@ public class DesktopServer {
         startServer(purchaseAmount);
     }
 
-    public static void startServer(String purchaseAmount) throws IOException {
-        final int PORT = 1430;
+    public static void startServer(String purchaseAmount) {
+        try {
+            InetAddress localHost = findSuitableHost();
+            if (localHost == null) {
+                System.err.println("No suitable network interface found.");
+                return;
+            }
 
-        // Initialize JmDNS
-        JmDNS jmdns = JmDNS.create();
-        ServiceInfo serviceInfo = ServiceInfo.create("_pos_terminal._tcp.local.", "POS Terminal", PORT, "POS Terminal Service");
-        jmdns.registerService(serviceInfo);
-        System.out.println("Service registered");
+            ServerSocket serverSocket = new ServerSocket(0, 50, localHost);
+            int port = serverSocket.getLocalPort();
+            System.out.println("Server started on IP: " + localHost.getHostAddress() + " and port: " + port);
 
-        // Start server
-        ServerSocket serverSocket = new ServerSocket(PORT);
+            JmDNS jmdns = JmDNS.create(localHost);
+            ServiceInfo serviceInfo = ServiceInfo.create(
+                    "_pos_terminal._tcp.", "POS Terminal", port, "POS Terminal Service"
+            );
+            jmdns.registerService(serviceInfo);
+            System.out.println("Service registered");
+
+            handleConnections(serverSocket, purchaseAmount);
+        } catch (IOException e) {
+            System.err.println("Failed to start server: " + e.getMessage());
+            e.printStackTrace();
+            System.exit(1);
+        }
+    }
+
+    private static void handleConnections(ServerSocket serverSocket, String purchaseAmount) {
+        try {
+            while (true) {
+                Socket clientSocket = serverSocket.accept();
+                System.out.println("Connected to " + clientSocket.getInetAddress());
+
+                // Send purchase amount to POS terminal
+                PrintWriter out = new PrintWriter(clientSocket.getOutputStream(), true);
+                out.println(purchaseAmount);
+
+                // Close the connection
+                out.close();
+                clientSocket.close();
+            }
+        } catch (IOException e) {
+            System.err.println("Error during connection handling: " + e.getMessage());
+            e.printStackTrace();
+        } finally {
+            try {
+                serverSocket.close();
+            } catch (IOException e) {
+                System.err.println("Error closing server socket: " + e.getMessage());
+                e.printStackTrace();
+            }
+        }
+    }
+
+    private static InetAddress findSuitableHost() throws SocketException {
         Enumeration<NetworkInterface> interfaces = NetworkInterface.getNetworkInterfaces();
         while (interfaces.hasMoreElements()) {
             NetworkInterface networkInterface = interfaces.nextElement();
-            // Filters out 127.0.0.1 and inactive interfaces
             if (networkInterface.isLoopback() || !networkInterface.isUp())
                 continue;
-            Enumeration<InetAddress> addresses = networkInterface.getInetAddresses();
-            while (addresses.hasMoreElements()) {
-                InetAddress addr = addresses.nextElement();
-                System.out.println(networkInterface.getDisplayName() + " " + addr.getHostAddress());
+
+            for (InetAddress address : Collections.list(networkInterface.getInetAddresses())) {
+                if (address instanceof Inet4Address && !address.isLoopbackAddress()) {
+                    return address;
+                }
             }
         }
-        System.out.println("Waiting for connection...");
-
-        while (true) {
-            Socket clientSocket = serverSocket.accept();
-            System.out.println("Connected to " + clientSocket.getInetAddress());
-
-            // Send purchase amount to POS terminal
-            PrintWriter out = new PrintWriter(clientSocket.getOutputStream(), true);
-            out.println(purchaseAmount);
-
-            // Close the connection
-            out.close();
-            clientSocket.close();
-        }
+        return null;
     }
 }
